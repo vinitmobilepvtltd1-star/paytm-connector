@@ -1,0 +1,20 @@
+{
+  "name": "paytm-connector",
+  "version": "1.0.0",
+  "description": "Vinit Mobile - Paytm settlement data ko Claude Desktop se jodne wala connector",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "test": "node test.mjs",
+    "start": "supergateway --stdio \"node index.mjs\" --port $PORT"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "paytmchecksum": "^1.5.1",
+    "zod": "^3.23.8",
+    "supergateway": "^3.4.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
