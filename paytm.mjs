@@ -70,7 +70,13 @@ async function postOnce(host, mode, m, date, pageNum) {
   const checksumHash = await sign(body, m.key, mode);
   const res = await fetch(host + SETTLEMENT_PATH, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      // Paytm ka firewall bina User-Agent wali request ko 403 de sakta hai
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    },
     body: JSON.stringify({ ...body, checksumHash }),
   });
   const text = await res.text();
@@ -78,7 +84,12 @@ async function postOnce(host, mode, m, date, pageNum) {
   try {
     json = JSON.parse(text);
   } catch {
-    json = { status: "FAILURE", errorMessage: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+    // JSON nahi aaya (jaise 403 Access Denied ka HTML page) - ye server hi mana kar raha hai
+    json = {
+      status: "FAILURE",
+      errorMessage: `HTTP ${res.status}: ${text.slice(0, 300)}`,
+      _blocked: true,
+    };
   }
   return json;
 }
@@ -93,12 +104,16 @@ function isChecksumFail(j) {
 
 // Ek page laana. Pehli baar sahi server + checksum tareeka khud dhoondhta hai.
 export async function fetchPage(m, date, pageNum) {
+  const all = HOSTS.flatMap((host) => SIGN_MODES.map((mode) => ({ host, mode })));
+  // Jo pehle chala tha wo sabse pehle, par wo band ho jaye to baaki bhi try honge
   const combos = working
-    ? [working]
-    : HOSTS.flatMap((host) => SIGN_MODES.map((mode) => ({ host, mode })));
+    ? [working, ...all.filter((c) => !(c.host === working.host && c.mode === working.mode))]
+    : all;
 
+  const blockedHosts = new Set(); // jin server ne 403 / HTML / network error diya
   let last = null;
   for (const c of combos) {
+    if (blockedHosts.has(c.host)) continue;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const j = await postOnce(c.host, c.mode, m, date, pageNum);
@@ -108,6 +123,12 @@ export async function fetchPage(m, date, pageNum) {
           continue;
         }
         last = { ...j, _host: c.host, _mode: c.mode };
+        if (j._blocked) {
+          // Ye server mana kar raha hai (403 Access Denied) - doosra server try karo
+          blockedHosts.add(c.host);
+          if (working && working.host === c.host) working = null;
+          break;
+        }
         if (isChecksumFail(j)) break; // agla tareeka try karo
         if (j.status === "SUCCESS" || j.status === "RECORD_NOT_FOUND") {
           working = c;
@@ -115,10 +136,12 @@ export async function fetchPage(m, date, pageNum) {
         return last;
       } catch (e) {
         last = { status: "FAILURE", errorMessage: String(e.message || e), _host: c.host, _mode: c.mode };
+        blockedHosts.add(c.host);
         break; // network error - agla server try karo
       }
     }
   }
+  if (last && blockedHosts.size) last._hostsBlocked = [...blockedHosts];
   return last;
 }
 
