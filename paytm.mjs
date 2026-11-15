@@ -111,6 +111,15 @@ export async function fetchPage(m, date, pageNum) {
     : all;
 
   const blockedHosts = new Set(); // jin server ne 403 / HTML / network error diya
+  const attempts = []; // har server ka alag jawab, taaki pata chale kaun kya bol raha hai
+  const note = (c, j) =>
+    attempts.push({
+      host: c.host.replace("https://", ""),
+      mode: c.mode,
+      status: j.status,
+      resultCode: j.resultCode,
+      msg: String(j.errorMessage || "").replace(/\s+/g, " ").slice(0, 110),
+    });
   let last = null;
   for (const c of combos) {
     if (blockedHosts.has(c.host)) continue;
@@ -123,8 +132,9 @@ export async function fetchPage(m, date, pageNum) {
           continue;
         }
         last = { ...j, _host: c.host, _mode: c.mode };
+        note(c, j);
         if (j._blocked) {
-          // Ye server mana kar raha hai (403 Access Denied) - doosra server try karo
+          // Ye server mana kar raha hai (403 Access Denied / 503) - doosra server try karo
           blockedHosts.add(c.host);
           if (working && working.host === c.host) working = null;
           break;
@@ -133,15 +143,17 @@ export async function fetchPage(m, date, pageNum) {
         if (j.status === "SUCCESS" || j.status === "RECORD_NOT_FOUND") {
           working = c;
         }
+        last._attempts = attempts;
         return last;
       } catch (e) {
         last = { status: "FAILURE", errorMessage: String(e.message || e), _host: c.host, _mode: c.mode };
+        note(c, last);
         blockedHosts.add(c.host);
         break; // network error - agla server try karo
       }
     }
   }
-  if (last && blockedHosts.size) last._hostsBlocked = [...blockedHosts];
+  if (last) last._attempts = attempts;
   return last;
 }
 
@@ -187,7 +199,13 @@ export async function fetchDay(m, date) {
       return {
         ok: j && j.status === "RECORD_NOT_FOUND",
         status: j ? j.status : "FAILURE",
-        error: j && j.status !== "RECORD_NOT_FOUND" ? (j.errorMessage || j.resultCode || "Unknown error") : null,
+        error:
+          j && j.status !== "RECORD_NOT_FOUND"
+            ? (j.errorMessage || j.resultCode || "Unknown error") +
+              (j._attempts && j._attempts.length
+                ? " || tried: " + j._attempts.map((a) => `${a.host} -> ${a.msg || a.status}`).join(" ; ")
+                : "")
+            : null,
         rows,
       };
     }
